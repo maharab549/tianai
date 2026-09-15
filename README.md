@@ -1,5 +1,8 @@
 # TiānAI
 
+[![CI](https://github.com/maharab549/tianai/actions/workflows/ci.yml/badge.svg)](https://github.com/maharab549/tianai/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 TiānAI is a private family-memory companion that runs its language model locally. Families can upload approved memories, ask questions in a member's learned conversational style, use live voice chat, and optionally connect a consented voice model.
 
 The application is designed for self-hosting. It does not require LM Studio, Ollama, a hosted LLM API, or an API key for text generation.
@@ -40,7 +43,7 @@ Requirements:
 - About 3 GB of free disk space for the default model
 
 ```bash
-git clone https://github.com/<owner>/tianai.git
+git clone https://github.com/maharab549/tianai.git
 cd tianai
 npm install
 npm --prefix backend install
@@ -150,4 +153,4 @@ Please read [SECURITY.md](SECURITY.md) before deploying on a public hostname.
 
 ## License and acknowledgements
 
-TiānAI source code is released under the [MIT License](LICENSE). TiānAI uses and integrates open-source projects including Qwen3 GGUF, `node-llama-cpp`, CosyVoice, React, Express, and Lucide. Their own licenses remain applicable. The interface draws inspiration from the public Airi project; third-party assets and names retain their original ownership and license terms.
+TiānAI source code is released under the [MIT License](LICENSE). TiānAI uses and integrates open-source projects including Qwen3 GGUF, `node-llama-cpp`, CosyVoice, React, Express, and Lucide. Their own licenses remain applicable. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the Airi asset attribution.
