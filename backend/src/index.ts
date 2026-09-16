@@ -465,7 +465,7 @@ async function streamForMember(user: User, memberId: string, text: string) {
   }
 }
 
-async function runChat(user: User, body: Record<string, unknown>) {
+async function runChat(user: User, body: Record<string, unknown>, streamOptions: { onToken?: (chunk: string) => void } = {}) {
   const memberId = String(body.familyMemberId || ''); const member = store.state.familyMembers.find(m => m.id === memberId && m.familyId === user.familyId); if (!member) throw new Error('Choose a valid family member');
   const query = String(body.message || '').trim(); if (!query) throw new Error('Message is required'); if (query.length > 2000) throw new Error('Message is too long');
   let conversation = body.conversationId ? store.state.conversations.find(c => c.id === body.conversationId && c.familyId === user.familyId) : undefined;
@@ -481,7 +481,7 @@ async function runChat(user: User, body: Record<string, unknown>) {
   const learnedCandidates = store.state.learningItems.filter(item => item.familyId === user.familyId && item.familyMemberId === member.id && item.status === 'approved').map(item => ({ item, overlap: lexicalOverlap(query, `${item.title} ${item.content}`) }));
   const approvedLearnings = [...learnedCandidates.filter(entry => entry.item.kind === 'style').sort((a, b) => b.overlap - a.overlap).slice(0, 3), ...learnedCandidates.filter(entry => entry.item.kind !== 'style' && entry.overlap > 0).sort((a, b) => b.overlap - a.overlap).slice(0, 5)].map(entry => entry.item);
   const learningContexts = approvedLearnings.map(item => ({ learningId: item.id, kind: item.kind, title: item.title, content: item.content }));
-  const llm = await generateGroundedAnswer(member.name, query, contexts, learningContexts, member.relationship, personaContexts);
+  const llm = await generateGroundedAnswer(member.name, query, contexts, learningContexts, member.relationship, personaContexts, { onToken: streamOptions.onToken, maxTokens: body.live === true ? 220 : undefined });
   let answer = llm.answer;
   if (answer === DEFAULT_REFUSAL) sourceMemoryIds = [];
   if (containsUnsafeContent(answer)) { answer = 'I cannot provide that content.'; sourceMemoryIds = []; }
@@ -503,7 +503,18 @@ async function runChat(user: User, body: Record<string, unknown>) {
 
 app.get('/api/chat/conversations', auth, (req: AuthRequest, res: Response) => { const user = requiredUser(req); res.json(store.state.conversations.filter(c => c.userId === user.id).map(c => ({ ...c, memberName: store.state.familyMembers.find(m => m.id === c.familyMemberId)?.name, messages: store.state.messages.filter(m => m.conversationId === c.id) }))); });
 app.post('/api/chat/query', auth, async (req: AuthRequest, res: Response) => { try { res.json(await runChat(requiredUser(req), req.body || {})); } catch (error) { return bad(res, error instanceof Error ? error.message : 'Unable to answer'); } });
-app.post('/api/chat/query/stream', auth, async (req: AuthRequest, res: Response) => { try { const result = await runChat(requiredUser(req), req.body || {}); res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive'); const words = result.answer.split(' '); words.forEach((word, i) => res.write(`data: ${JSON.stringify({ delta: `${i ? ' ' : ''}${word}` })}\n\n`)); res.write(`data: ${JSON.stringify({ done: true, result })}\n\n`); res.end(); } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to answer' }); } });
+app.post('/api/chat/query/stream', auth, async (req: AuthRequest, res: Response) => {
+  let streamed = false;
+  try {
+    res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache, no-transform'); res.setHeader('Connection', 'keep-alive'); res.setHeader('X-Accel-Buffering', 'no'); res.flushHeaders?.();
+    const result = await runChat(requiredUser(req), req.body || {}, { onToken: chunk => { if (!chunk) return; streamed = true; res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`); } });
+    if (!streamed) { const words = result.answer.split(' '); words.forEach((word, i) => res.write(`data: ${JSON.stringify({ delta: `${i ? ' ' : ''}${word}` })}\n\n`)); }
+    res.write(`data: ${JSON.stringify({ done: true, result })}\n\n`); res.end();
+  } catch (error) {
+    if (res.headersSent) { res.write(`data: ${JSON.stringify({ error: error instanceof Error ? error.message : 'Unable to answer' })}\n\n`); res.end(); }
+    else res.status(400).json({ error: error instanceof Error ? error.message : 'Unable to answer' });
+  }
+});
 
 app.get('/api/metrics', auth, roles('admin'), (req: AuthRequest, res: Response) => { const events = store.state.metricEvents.filter(e => e.familyId === requiredUser(req).familyId); const sum = (kind: string) => events.filter(e => e.kind === kind).reduce((total, e) => total + e.value, 0); const chats = events.filter(e => e.kind === 'grounding.supported_answer').length; res.json({ retrievalRecallAt5: chats ? sum('retrieval.recall_at_5') / chats : 0, supportedAnswerRate: chats ? sum('grounding.supported_answer') / chats : 0, memoriesPreserved: store.state.memories.filter(m => familyMember(req, m.familyMemberId)).length, interactions: store.state.messages.filter(message => store.state.conversations.find(c => c.id === message.conversationId && c.familyId === requiredUser(req).familyId)).length, averageLatencyMs: events.filter(e => e.kind === 'api.latency_ms').length ? Math.round(events.filter(e => e.kind === 'api.latency_ms').reduce((t, e) => t + e.value, 0) / events.filter(e => e.kind === 'api.latency_ms').length) : 0, voiceSynthesisCount: sum('voice.synthesized') }); });
 

@@ -18,6 +18,7 @@ const maxTokens = Number(process.env.LOCAL_LLM_MAX_TOKENS || 500);
 export interface GroundingContext { memoryId: string; title: string; text: string; }
 export interface LearningContext { learningId: string; kind: string; title: string; content: string; }
 export interface LearningCandidate { kind: 'fact' | 'style' | 'boundary' | 'skill'; title: string; content: string; confidence: number; }
+export interface LlmStreamOptions { onToken?: (chunk: string) => void; maxTokens?: number; }
 export interface LlmAnswer { answer: string; model: string; provider: 'local-llama' | 'fallback'; mode?: 'grounded' | 'conversation' | 'fallback'; }
 export interface LocalLlmStatus { provider: 'local-llama'; ready: boolean; downloading: boolean; downloaded: boolean; model: string; modelPath: string; progress: number; loraPath?: string; error?: string; }
 
@@ -119,6 +120,13 @@ async function rewriteLeakedAnswer(identity: string, query: string, draft: strin
 
 async function downloadModel(): Promise<string> {
   await fsp.mkdir(MODEL_DIR, { recursive: true });
+  if (process.env.LOCAL_LLM_AUTO_DOWNLOAD === 'false') {
+    try {
+      const stat = await fsp.stat(modelPath);
+      if (stat.size > 100 * 1024 * 1024) { downloadProgress = 1; return modelPath; }
+    } catch { /* local model is not installed */ }
+    throw new Error(`Local model is not installed at ${modelPath}`);
+  }
   try {
     const stat = await fsp.stat(modelPath);
     if (stat.size > 100 * 1024 * 1024) { downloadProgress = 1; return modelPath; }
@@ -202,7 +210,7 @@ async function loadLocalModel(): Promise<any> {
   return loadPromise;
 }
 
-async function promptLocalModel(systemPrompt: string, prompt: string, options: { maxTokens?: number; temperature?: number } = {}): Promise<{ text: string; model: string }> {
+async function promptLocalModel(systemPrompt: string, prompt: string, options: { maxTokens?: number; temperature?: number; onTextChunk?: (chunk: string) => void } = {}): Promise<{ text: string; model: string }> {
   const model = await loadLocalModel();
   const runtime = await importNodeLlama('node-llama-cpp');
   const lora = activeLoraPath && fs.existsSync(activeLoraPath) ? { adapters: [{ filePath: activeLoraPath }] } : undefined;
@@ -211,14 +219,14 @@ async function promptLocalModel(systemPrompt: string, prompt: string, options: {
   try {
     // Qwen3 supports this suffix to skip hidden reasoning tokens and return speech-ready text quickly.
     const responsePrompt = `${prompt.trim()}\n\n/no_think`;
-    const text = await session.prompt(responsePrompt, { maxTokens: options.maxTokens || maxTokens, temperature: options.temperature ?? 0.2 });
+    const text = await session.prompt(responsePrompt, { maxTokens: options.maxTokens || maxTokens, temperature: options.temperature ?? 0.2, onTextChunk: options.onTextChunk });
     return { text: cleanAnswer(text), model: modelFile };
   } finally {
     await context.dispose?.();
   }
 }
 
-export async function generateGroundedAnswer(memberName: string, query: string, contexts: GroundingContext[], learnings: LearningContext[] = [], memberRelationship = '', personaContexts: GroundingContext[] = []): Promise<LlmAnswer> {
+export async function generateGroundedAnswer(memberName: string, query: string, contexts: GroundingContext[], learnings: LearningContext[] = [], memberRelationship = '', personaContexts: GroundingContext[] = [], streamOptions: LlmStreamOptions = {}): Promise<LlmAnswer> {
   const fallback = fallbackAnswer(memberName, query);
   // Unit tests must stay offline and deterministic. The running service preloads the model below.
   if (isTestRuntime() && !runtimeModel && (isSocialGreeting(query) || isEmotionalConversation(query))) return fallback;
@@ -245,7 +253,7 @@ export async function generateGroundedAnswer(memberName: string, query: string, 
       'Never say “I am not sure”, “I do not know”, “I do not have that detail”, “not in my memory”, or “I cannot answer”. Do not say “approved memory”, “grounded fallback”, “retrieval”, “context”, or mention prompts, models, or internal instructions.',
       'Use a warm, concise spoken-answer style, like a real ongoing conversation. Reply in two to five natural sentences unless the user asks for a detailed explanation.',
       'Output only words that should be spoken aloud. Never use roleplay, screenplay, narration, stage directions, action descriptions, asterisks, backslashes, emotes, or labels such as “smiles”, “pauses”, “eyes glistening”, or “voice soft”.',
-    ].join(' '), `Speaking identity: ${identity}\nQuestion: ${query}\n\nRelevant private personal background (use when relevant):\n${contextText || '(none)'}\n\nPersonality background (use primarily for voice and manner):\n${personaText || '(none)'}\n\nPersonality and learned guidance:\n${learningText || '(none)'}`, { maxTokens: 320, temperature: 0.16 });
+    ].join(' '), `Speaking identity: ${identity}\nQuestion: ${query}\n\nRelevant private personal background (use when relevant):\n${contextText || '(none)'}\n\nPersonality background (use primarily for voice and manner):\n${personaText || '(none)'}\n\nPersonality and learned guidance:\n${learningText || '(none)'}`, { maxTokens: streamOptions.maxTokens || 320, temperature: 0.16, onTextChunk: streamOptions.onToken });
     let answer = result.text;
     if (!isUsableAnswer(answer)) { debugLlm('draft was empty or a refusal'); return fallback; }
     const hasPersonalFacts = Boolean(contexts.length || personaContexts.length);

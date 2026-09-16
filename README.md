@@ -23,7 +23,7 @@ TiānAI keeps personal memories as private background. The chat response is gene
 
 ## Current status
 
-The current release is a working local self-hosted application. It includes the responsive stage interface, authentication, memory vault, local Qwen inference, approval-aware retrieval, learning loop, live voice streaming route, CosyVoice adapter, Docker files, tests, and Synology deployment documentation.
+The current release is a working local self-hosted application. It includes the responsive stage interface, authentication, memory vault, local Qwen inference, approval-aware retrieval, learning loop, live voice streaming route, a rigged WebGL VRM avatar with blend-shape lip sync, CosyVoice adapter, Docker files, tests, and Synology deployment documentation.
 
 The default repository is a local JSON store and local filesystem. PostgreSQL, pgvector, and MinIO definitions are included in Compose and the SQL migration as the next storage adapter, but the default chat code does not yet depend on those services. This keeps local development simple while leaving a clear path to a multi-user server deployment.
 
@@ -57,6 +57,7 @@ flowchart LR
 | Web client | React, TypeScript, Vite, Lucide | Stage UI, vault, chat, live microphone mode, admin screens |
 | API | Express, TypeScript | Authentication, family roles, memory workflow, chat, voice, audit, metrics |
 | Local LLM | Qwen3 `Q4_K_M` GGUF, `node-llama-cpp` | In-process text generation and learning review |
+| Live avatar | Three.js, `@pixiv/three-vrm`, VRM 0/1 model | WebGL rendering, idle motion, blinking, and voice-driven mouth expressions |
 | Memory processing | `mammoth`, `pdf-parse`, local parsers | Text extraction, chunking, metadata, approval state |
 | Retrieval | Local deterministic embeddings plus lexical scoring | Relevant approved memory selection |
 | Learning | JSONL export, Python QLoRA worker | Durable profile learning and optional adapter training |
@@ -93,6 +94,8 @@ On PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
 Open <http://localhost:5173>. The API health endpoint is <http://localhost:4000/api/health>. On first start, the backend downloads `Qwen3-4B-Q4_K_M.gguf` from Hugging Face into `backend/models` and loads it locally. The default download is approximately 2.5 GB.
 
 For a smaller machine, set the Qwen3 0.6B model values shown in `.env.synology.example`. Any replacement model must be compatible with the `node-llama-cpp` GGUF runtime and its chat template.
+
+The live stage includes a redistributable VRoid sample model at `frontend/public/avatars/avatar-sample-a.vrm`. It is loaded locally by the browser; no avatar CDN or external avatar API is required. Replace that file with a family-approved VRM model when deploying a personal representation. Review the model license before redistribution; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 The seeded account is for local development only:
 
@@ -166,7 +169,7 @@ QLoRA training is not included in the default inference container. Install `back
 
 ## Voice and live conversation
 
-The browser live mode uses speech recognition, pauses while TiānAI answers, and schedules streamed raw PCM chunks as they arrive. Chrome or Edge microphone permission is required. Headphones reduce feedback.
+The browser live mode uses speech recognition, pauses while TiānAI answers, and schedules streamed raw PCM chunks as they arrive. The VRM avatar renders continuously in WebGL and maps the current voice energy to its `aa`, `ih`, `ou`, `ee`, and `oh` facial expressions. Chrome or Edge microphone permission is required. Headphones reduce feedback.
 
 For a consented cloned voice, run [CosyVoice](https://github.com/FunAudioLLM/CosyVoice), set `COSYVOICE_URL`, upload a clean 10–30 second single-speaker reference, approve voice consent, and enter the exact words spoken in the recording. TiānAI normalizes the sample with `ffmpeg` before synthesis. Without CosyVoice, the API returns a clearly labeled local fallback tone.
 
@@ -221,7 +224,9 @@ backend/tests/              Backend tests
 backend/training/           Optional QLoRA training worker and requirements
 backend/migrations/         PostgreSQL and pgvector schema foundation
 frontend/src/AiriApp.tsx    Main stage interface
+frontend/src/LiveAvatar.tsx Three.js VRM renderer and live facial animation
 frontend/src/styles.css     Responsive visual system
+frontend/public/avatars/    Local VRM avatar assets
 docker-compose.yml          Local, NAS, and tunnel service definitions
 DEPLOY-SYNOLOGY.md          Synology and Cloudflare deployment runbook
 ```
