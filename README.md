@@ -167,6 +167,14 @@ The learning loop is deliberately separate from raw memory retrieval:
 
 QLoRA training is not included in the default inference container. Install `backend/training/requirements.txt` in a separate Python environment and configure the converter only on a host with enough memory or GPU capacity.
 
+## Memorial profiles and fidelity
+
+For a deceased family member, TiānAI builds a memorial profile from approved records. The profile stores verified biography, exact relationships, values, speaking manner, recurring phrases, favorite topics, sensitive topics, and response guidance. Recent conversation turns are also supplied to the local model so replies maintain continuity instead of answering every message as a new session.
+
+Open the **profile** panel to edit the portrait directly, or use **compile from approved memories** to create a draft from processed transcripts. Review the generated draft before saving it. The compiler never has access to pending or rejected records, and source memory IDs are retained with the profile for traceability.
+
+This system produces an AI memorial representation; it cannot establish that a response was written or spoken by the deceased person. High-fidelity voice and avatar output require authorized reference recordings, active consent records, and a user-owned VRM asset. A convincing result depends on the quality, diversity, and accuracy of the supplied family records; no model can recreate a person perfectly or recover details that were never recorded.
+
 ## Voice and live conversation
 
 The browser live mode uses speech recognition, pauses while TiānAI answers, and schedules streamed raw PCM chunks as they arrive. The VRM avatar renders continuously in WebGL and maps the current voice energy to its `aa`, `ih`, `ou`, `ee`, and `oh` facial expressions. Chrome or Edge microphone permission is required. Headphones reduce feedback.
@@ -184,6 +192,9 @@ The main authenticated routes are:
 | `GET /api/bootstrap` | Load the current family workspace. |
 | `POST /api/memories` | Upload or create a memory. |
 | `POST /api/memories/:id/approve` | Approve a pending memory. |
+| `GET /api/family/members/:id/profile` | Read a member's curated memorial profile. |
+| `PATCH /api/family/members/:id/profile` | Save administrator or adult-edited profile guidance. |
+| `POST /api/family/members/:id/profile/compile` | Compile a profile draft from approved processed memories. |
 | `POST /api/chat/query` | Generate a complete local answer. |
 | `POST /api/chat/query/stream` | Stream answer tokens through SSE. |
 | `POST /api/voice/stream` | Stream consented voice PCM. |

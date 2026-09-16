@@ -6,7 +6,19 @@ export type PosthumousStatus = 'authorization_requested' | 'under_review' | 'app
 
 export interface Family { id: string; name: string; createdAt: string; }
 export interface User { id: string; familyId: string; name: string; role: Role; email: string; passwordHash: string; isChildAccount: boolean; createdAt: string; }
-export interface FamilyMember { id: string; familyId: string; name: string; relationship: string; isDeceased: boolean; posthumousStatus: PosthumousStatus; createdAt: string; }
+export interface MemorialProfile {
+  biography?: string;
+  voiceStyle?: string;
+  values?: string;
+  relationshipNotes?: string;
+  signaturePhrases?: string[];
+  favoriteTopics?: string[];
+  sensitiveTopics?: string[];
+  responseGuidance?: string;
+  sourceMemoryIds?: string[];
+  updatedAt?: string;
+}
+export interface FamilyMember { id: string; familyId: string; name: string; relationship: string; isDeceased: boolean; posthumousStatus: PosthumousStatus; memorialProfile?: MemorialProfile; createdAt: string; }
 export interface Memory { id: string; familyMemberId: string; uploaderId: string; type: MemoryType; title: string; storagePath?: string; originalName?: string; mimeType?: string; transcript?: string; tags: string[]; consentStatus: ConsentStatus; capturedAt?: string; createdAt: string; processedAt?: string; processingStatus?: 'processing' | 'processed' | 'needs_processor'; }
 export interface MemoryEmbedding { id: string; memoryId: string; chunkText: string; embedding: number[]; metadata: Record<string, unknown>; }
 export interface ConsentRecord { id: string; familyMemberId: string; type: ConsentType; grantedBy: string; grantedAt: string; legalBasis?: string; revokedAt?: string; }

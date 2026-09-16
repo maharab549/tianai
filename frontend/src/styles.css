@@ -89,4 +89,9 @@
 .airi-prompt-field { display:flex; flex-direction:column; gap:6px; color:#81919a; font:8px 'DM Mono',monospace; line-height:1.4; }
 .airi-prompt-field textarea { min-height:55px; margin:0; padding:8px; color:#d9e4e8; border:1px solid rgba(216,236,241,.12); border-radius:4px; outline:0; resize:vertical; background:#1a2128; font:10px system-ui,sans-serif; line-height:1.4; }
 .airi-prompt-field textarea:focus { border-color:rgba(139,227,225,.4); box-shadow:0 0 0 2px rgba(139,227,225,.06); }
+.airi-memorial-panel { gap:12px; padding-bottom:22px; }
+.airi-memorial-form { display:flex; flex-direction:column; gap:10px; }
+.airi-memorial-form input { min-height:32px; margin:0; padding:8px; color:#d9e4e8; border:1px solid rgba(216,236,241,.12); border-radius:4px; outline:0; background:#1a2128; font:10px system-ui,sans-serif; }
+.airi-memorial-form input:focus { border-color:rgba(139,227,225,.4); box-shadow:0 0 0 2px rgba(139,227,225,.06); }
+.airi-compile-button { align-self:flex-start; }
 @media (max-width:700px) { .airi-stage-status strong { max-width:125px; } .airi-panel > .airi-inline-notice { margin-top:8px; } }

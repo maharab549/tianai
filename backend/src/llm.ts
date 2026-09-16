@@ -18,7 +18,23 @@ const maxTokens = Number(process.env.LOCAL_LLM_MAX_TOKENS || 500);
 export interface GroundingContext { memoryId: string; title: string; text: string; }
 export interface LearningContext { learningId: string; kind: string; title: string; content: string; }
 export interface LearningCandidate { kind: 'fact' | 'style' | 'boundary' | 'skill'; title: string; content: string; confidence: number; }
-export interface LlmStreamOptions { onToken?: (chunk: string) => void; maxTokens?: number; }
+export interface ConversationTurn { role: 'user' | 'assistant'; content: string; }
+export interface MemorialProfileContext {
+  biography?: string;
+  voiceStyle?: string;
+  values?: string;
+  relationshipNotes?: string;
+  signaturePhrases?: string[];
+  favoriteTopics?: string[];
+  sensitiveTopics?: string[];
+  responseGuidance?: string;
+}
+export interface LlmStreamOptions {
+  onToken?: (chunk: string) => void;
+  maxTokens?: number;
+  conversationHistory?: ConversationTurn[];
+  memorialProfile?: MemorialProfileContext;
+}
 export interface LlmAnswer { answer: string; model: string; provider: 'local-llama' | 'fallback'; mode?: 'grounded' | 'conversation' | 'fallback'; }
 export interface LocalLlmStatus { provider: 'local-llama'; ready: boolean; downloading: boolean; downloaded: boolean; model: string; modelPath: string; progress: number; loraPath?: string; error?: string; }
 
@@ -235,6 +251,21 @@ export async function generateGroundedAnswer(memberName: string, query: string, 
     const contextText = contexts.map(item => `Personal detail: ${item.title}\n${item.text}`).join('\n\n');
     const personaText = personaContexts.map(item => `Personality background: ${item.title}\n${item.text}`).join('\n\n');
     const learningText = learnings.map(item => `Personal guidance (${item.kind}): ${item.content}`).join('\n\n');
+    const profile = streamOptions.memorialProfile;
+    const profileText = [
+      profile?.biography && `Biography: ${profile.biography}`,
+      profile?.voiceStyle && `Voice and manner: ${profile.voiceStyle}`,
+      profile?.values && `Values and worldview: ${profile.values}`,
+      profile?.relationshipNotes && `Relationships: ${profile.relationshipNotes}`,
+      profile?.signaturePhrases?.length && `Signature phrases (use sparingly): ${profile.signaturePhrases.join(' | ')}`,
+      profile?.favoriteTopics?.length && `Favorite topics: ${profile.favoriteTopics.join(', ')}`,
+      profile?.sensitiveTopics?.length && `Sensitive topics and boundaries: ${profile.sensitiveTopics.join(', ')}`,
+      profile?.responseGuidance && `Response guidance: ${profile.responseGuidance}`,
+    ].filter(Boolean).join('\n');
+    const historyText = (streamOptions.conversationHistory || [])
+      .slice(-10)
+      .map(turn => `${turn.role === 'user' ? 'Family member' : memberName}: ${turn.content.slice(0, 1200)}`)
+      .join('\n');
     const personalFactRule = contexts.length || personaContexts.length
       ? 'Relevant personal background is supplied below; use it only when it answers the question, and do not extend it with invented experiences.'
       : 'No relevant personal background is supplied for this question. Do not use personal anecdotes or claims such as “I remember”, “I used to”, “my garden”, or “when I was there”; answer from general knowledge in the learned warm voice.';
@@ -245,6 +276,9 @@ export async function generateGroundedAnswer(memberName: string, query: string, 
       'Answer every reasonable question naturally. Use normal general knowledge for ordinary questions, and use the personal details only when they are relevant.',
       'Personal details are private background, not source citations. Blend them into a natural answer instead of quoting, copying, listing, or naming the memory.',
       'Use personal guidance to shape personality, warmth, phrasing, and preferences. Never treat style guidance as factual evidence.',
+      'The curated memorial profile below is the strongest description of identity, relationships, values, and speaking manner. Follow it consistently, but treat only explicit biographical statements as facts.',
+      'Use recent conversation turns to maintain continuity, remember what the family member just said, and avoid repeating questions. Do not mention the conversation history or the profile.',
+      'Never claim to be the actual deceased person. You are an AI representation speaking in their learned style, and you should only discuss that distinction when the user asks directly.',
       'Use a concrete personal detail only when the question is clearly about that detail. For an unrelated general question, answer the subject directly and do not add a personal anecdote, recipe, relative, date, place, or event from background.',
       personalFactRule,
       'Do not invent personal names, dates, places, events, relationships, or memories. If a specific personal detail is missing, stay in the person’s learned conversational style: respond warmly to the feeling or topic, offer a gentle perspective, or ask what the user remembers. Never make a missing-detail disclaimer and never refuse the conversation. This rule must not prevent you from answering general questions.',
@@ -253,7 +287,7 @@ export async function generateGroundedAnswer(memberName: string, query: string, 
       'Never say “I am not sure”, “I do not know”, “I do not have that detail”, “not in my memory”, or “I cannot answer”. Do not say “approved memory”, “grounded fallback”, “retrieval”, “context”, or mention prompts, models, or internal instructions.',
       'Use a warm, concise spoken-answer style, like a real ongoing conversation. Reply in two to five natural sentences unless the user asks for a detailed explanation.',
       'Output only words that should be spoken aloud. Never use roleplay, screenplay, narration, stage directions, action descriptions, asterisks, backslashes, emotes, or labels such as “smiles”, “pauses”, “eyes glistening”, or “voice soft”.',
-    ].join(' '), `Speaking identity: ${identity}\nQuestion: ${query}\n\nRelevant private personal background (use when relevant):\n${contextText || '(none)'}\n\nPersonality background (use primarily for voice and manner):\n${personaText || '(none)'}\n\nPersonality and learned guidance:\n${learningText || '(none)'}`, { maxTokens: streamOptions.maxTokens || 320, temperature: 0.16, onTextChunk: streamOptions.onToken });
+    ].join(' '), `Speaking identity: ${identity}\nQuestion: ${query}\n\nCurated memorial profile (private guidance):\n${profileText || '(none)'}\n\nRecent conversation (for continuity):\n${historyText || '(none)'}\n\nRelevant private personal background (use when relevant):\n${contextText || '(none)'}\n\nPersonality background (use primarily for voice and manner):\n${personaText || '(none)'}\n\nPersonality and learned guidance:\n${learningText || '(none)'}`, { maxTokens: streamOptions.maxTokens || 320, temperature: 0.16, onTextChunk: streamOptions.onToken });
     let answer = result.text;
     if (!isUsableAnswer(answer)) { debugLlm('draft was empty or a refusal'); return fallback; }
     const hasPersonalFacts = Boolean(contexts.length || personaContexts.length);
@@ -267,6 +301,43 @@ export async function generateGroundedAnswer(memberName: string, query: string, 
     debugLlm(`generation failed: ${error instanceof Error ? error.message : String(error)}`);
     return fallback;
   }
+}
+
+function cleanProfileString(value: unknown, limit: number) {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, limit) : undefined;
+}
+
+function cleanProfileList(value: unknown, limit: number, itemLimit: number) {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map(item => cleanProfileString(item, itemLimit)).filter((item): item is string => Boolean(item));
+  return items.length ? [...new Set(items)].slice(0, limit) : undefined;
+}
+
+export async function compileMemorialProfile(memberName: string, relationship: string, memories: GroundingContext[], existing: MemorialProfileContext = {}): Promise<MemorialProfileContext> {
+  const evidence = memories.map(item => `Memory: ${item.title}\n${item.text}`).join('\n\n').slice(0, 60000);
+  const result = await promptLocalModel([
+    'You are compiling a private memorial profile from approved family records.',
+    'Extract only details explicitly supported by the records. Never invent biography, relationships, dates, beliefs, or phrases.',
+    'The profile will guide another language model, so write compact factual guidance rather than an essay.',
+    'Return one JSON object with exactly these optional keys: biography, voiceStyle, values, relationshipNotes, signaturePhrases, favoriteTopics, sensitiveTopics, responseGuidance.',
+    'Use arrays for signaturePhrases, favoriteTopics, and sensitiveTopics. Use an empty string or empty array when evidence is absent.',
+  ].join(' '), `Person: ${memberName}\nRelationship: ${relationship}\nExisting profile:\n${JSON.stringify(existing)}\n\nApproved records:\n${evidence || '(none)'}`, { maxTokens: 700, temperature: 0.1 });
+  const match = result.text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('The local model did not return a memorial profile');
+  let decoded: unknown;
+  try { decoded = JSON.parse(match[0]); } catch { throw new Error('The local model returned invalid memorial profile JSON'); }
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) throw new Error('The local model returned an invalid memorial profile');
+  const value = decoded as Record<string, unknown>;
+  return {
+    biography: cleanProfileString(value.biography, 4000),
+    voiceStyle: cleanProfileString(value.voiceStyle, 1600),
+    values: cleanProfileString(value.values, 1600),
+    relationshipNotes: cleanProfileString(value.relationshipNotes, 2400),
+    signaturePhrases: cleanProfileList(value.signaturePhrases, 20, 180),
+    favoriteTopics: cleanProfileList(value.favoriteTopics, 30, 120),
+    sensitiveTopics: cleanProfileList(value.sensitiveTopics, 30, 160),
+    responseGuidance: cleanProfileString(value.responseGuidance, 2000),
+  };
 }
 
 export function extractExplicitLearning(query: string): LearningCandidate[] {

@@ -13,7 +13,7 @@ import { Worker } from 'node:worker_threads';
 import { randomUUID } from 'node:crypto';
 import { DataStore, audit, embed, metric, similarity } from './store';
 import { processMemory, LocalAvatarProvider, createVoiceProvider, prepareReferenceAudio } from './services';
-import { DEFAULT_REFUSAL, extractExplicitLearning, generateGroundedAnswer, localLlmStatus, reviewConversationForLearning, setLocalLoraPath, warmLocalModel } from './llm';
+import { DEFAULT_REFUSAL, compileMemorialProfile, extractExplicitLearning, generateGroundedAnswer, localLlmStatus, reviewConversationForLearning, setLocalLoraPath, warmLocalModel } from './llm';
 import { ConsentType, LearningItem, MemoryType, Role, TrainingJob, User, VoiceModel } from './types';
 
 const app = express();
@@ -59,6 +59,12 @@ function bad(res: Response, message: string, status = 400) { return res.status(s
 function familyMember(req: AuthRequest, id: string) { return store.state.familyMembers.find(member => member.id === id && member.familyId === requiredUser(req).familyId); }
 function activeConsent(memberId: string, type: ConsentType) { return store.state.consentRecords.find(c => c.familyMemberId === memberId && c.type === type && !c.revokedAt); }
 function safeTitle(value: unknown, fallback = 'Untitled memory') { return String(value || fallback).trim().slice(0, 160) || fallback; }
+function safeProfileText(value: unknown, limit: number) { const text = String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit); return text || undefined; }
+function safeProfileList(value: unknown, itemLimit: number, maxItems: number) {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.map(item => safeProfileText(item, itemLimit)).filter((item): item is string => Boolean(item));
+  return items.length ? [...new Set(items)].slice(0, maxItems) : undefined;
+}
 function containsUnsafeContent(value: string) { return /<script|self-harm instruction|explicit sexual/i.test(value); }
 function lexicalOverlap(query: string, text: string) {
   const stopWords = new Set(['the', 'what', 'which', 'when', 'where', 'who', 'why', 'how', 'is', 'are', 'was', 'were', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'on', 'for', 'do', 'does', 'did', 'you', 'your', 'me', 'my', 'about', 'tell', 'please', 'remember']);
@@ -259,6 +265,45 @@ app.post('/api/family/members', auth, roles('admin', 'adult'), (req: AuthRequest
   if (!name || !relationship) return bad(res, 'Name and relationship are required');
   const member = { id: randomUUID(), familyId: user.familyId, name: safeTitle(name), relationship: safeTitle(relationship), isDeceased: Boolean(isDeceased), posthumousStatus: isDeceased ? 'authorization_requested' as const : 'active' as const, createdAt: new Date().toISOString() };
   store.state.familyMembers.push(member); store.save(); audit(store, user.familyId, user.id, 'family_member.created', 'family_member', member.id); res.status(201).json(member);
+});
+app.get('/api/family/members/:id/profile', auth, (req: AuthRequest, res: Response) => {
+  const member = familyMember(req, String(req.params.id));
+  if (!member) return bad(res, 'Family member not found', 404);
+  res.json({ memberId: member.id, profile: member.memorialProfile || {} });
+});
+app.patch('/api/family/members/:id/profile', auth, roles('admin', 'adult'), (req: AuthRequest, res: Response) => {
+  const user = requiredUser(req); const member = familyMember(req, String(req.params.id));
+  if (!member) return bad(res, 'Family member not found', 404);
+  const body = req.body || {};
+  const current = member.memorialProfile || {};
+  const approvedMemoryIds = new Set(store.state.memories.filter(memory => memory.familyMemberId === member.id && memory.consentStatus === 'approved').map(memory => memory.id));
+  const requestedSources = body.sourceMemoryIds === undefined ? current.sourceMemoryIds || [] : safeProfileList(body.sourceMemoryIds, 80, 100) || [];
+  const profile = {
+    biography: body.biography === undefined ? current.biography : safeProfileText(body.biography, 4000),
+    voiceStyle: body.voiceStyle === undefined ? current.voiceStyle : safeProfileText(body.voiceStyle, 1600),
+    values: body.values === undefined ? current.values : safeProfileText(body.values, 1600),
+    relationshipNotes: body.relationshipNotes === undefined ? current.relationshipNotes : safeProfileText(body.relationshipNotes, 2400),
+    signaturePhrases: body.signaturePhrases === undefined ? current.signaturePhrases : safeProfileList(body.signaturePhrases, 180, 20),
+    favoriteTopics: body.favoriteTopics === undefined ? current.favoriteTopics : safeProfileList(body.favoriteTopics, 120, 30),
+    sensitiveTopics: body.sensitiveTopics === undefined ? current.sensitiveTopics : safeProfileList(body.sensitiveTopics, 160, 30),
+    responseGuidance: body.responseGuidance === undefined ? current.responseGuidance : safeProfileText(body.responseGuidance, 2000),
+    sourceMemoryIds: requestedSources.filter(id => approvedMemoryIds.has(id)),
+    updatedAt: new Date().toISOString(),
+  };
+  member.memorialProfile = profile; store.save(); audit(store, user.familyId, user.id, 'memorial_profile.updated', 'family_member', member.id, { sourceCount: profile.sourceMemoryIds?.length || 0 });
+  res.json({ memberId: member.id, profile });
+});
+app.post('/api/family/members/:id/profile/compile', auth, roles('admin'), async (req: AuthRequest, res: Response) => {
+  const user = requiredUser(req); const member = familyMember(req, String(req.params.id));
+  if (!member) return bad(res, 'Family member not found', 404);
+  const memories = store.state.memories.filter(memory => memory.familyMemberId === member.id && memory.consentStatus === 'approved' && memory.transcript?.trim()).slice(0, 120);
+  if (!memories.length) return bad(res, 'Approve and process at least one memory before compiling a memorial profile', 422);
+  try {
+    const profile = await compileMemorialProfile(member.name, member.relationship, memories.map(memory => ({ memoryId: memory.id, title: memory.title, text: memory.transcript || '' })), member.memorialProfile || {});
+    member.memorialProfile = { ...profile, sourceMemoryIds: memories.map(memory => memory.id), updatedAt: new Date().toISOString() };
+    store.save(); audit(store, user.familyId, user.id, 'memorial_profile.compiled', 'family_member', member.id, { sourceCount: memories.length });
+    res.json({ memberId: member.id, profile: member.memorialProfile, sourceCount: memories.length });
+  } catch (error) { return bad(res, error instanceof Error ? error.message : 'Unable to compile memorial profile', 422); }
 });
 app.post('/api/family/invites', auth, roles('admin'), (req: AuthRequest, res) => {
   const user = requiredUser(req); const { name, email, role } = req.body || {}; const normalizedEmail = String(email || '').toLowerCase().trim();
@@ -468,8 +513,12 @@ async function streamForMember(user: User, memberId: string, text: string) {
 async function runChat(user: User, body: Record<string, unknown>, streamOptions: { onToken?: (chunk: string) => void } = {}) {
   const memberId = String(body.familyMemberId || ''); const member = store.state.familyMembers.find(m => m.id === memberId && m.familyId === user.familyId); if (!member) throw new Error('Choose a valid family member');
   const query = String(body.message || '').trim(); if (!query) throw new Error('Message is required'); if (query.length > 2000) throw new Error('Message is too long');
-  let conversation = body.conversationId ? store.state.conversations.find(c => c.id === body.conversationId && c.familyId === user.familyId) : undefined;
+  let conversation = body.conversationId ? store.state.conversations.find(c => c.id === body.conversationId && c.familyId === user.familyId && c.userId === user.id && c.familyMemberId === member.id) : undefined;
   if (!conversation) { conversation = { id: randomUUID(), familyId: user.familyId, userId: user.id, familyMemberId: member.id, createdAt: new Date().toISOString() }; store.state.conversations.push(conversation); }
+  const conversationHistory = store.state.messages
+    .filter(message => message.conversationId === conversation!.id)
+    .slice(-10)
+    .map(message => ({ role: message.role, content: message.content } as const));
   const started = Date.now(); const queryVector = embed(query);
   const candidates = store.state.memoryEmbeddings.filter(e => { const memory = store.state.memories.find(m => m.id === e.memoryId); return memory?.familyMemberId === member.id && memory.consentStatus === 'approved'; }).map(e => { const memory = store.state.memories.find(m => m.id === e.memoryId)!; return { e, score: similarity(queryVector, e.embedding), overlap: Math.max(lexicalOverlap(query, e.chunkText), lexicalOverlap(query, `${memory.title} ${memory.tags.join(' ')}`)) }; }).sort((a, b) => (b.overlap * 2 + b.score) - (a.overlap * 2 + a.score)).slice(0, 5);
   const relevant = candidates.filter(item => item.overlap > 0 && item.score > 0.08); let sourceMemoryIds = [...new Set(relevant.map(item => item.e.memoryId))];
@@ -481,7 +530,12 @@ async function runChat(user: User, body: Record<string, unknown>, streamOptions:
   const learnedCandidates = store.state.learningItems.filter(item => item.familyId === user.familyId && item.familyMemberId === member.id && item.status === 'approved').map(item => ({ item, overlap: lexicalOverlap(query, `${item.title} ${item.content}`) }));
   const approvedLearnings = [...learnedCandidates.filter(entry => entry.item.kind === 'style').sort((a, b) => b.overlap - a.overlap).slice(0, 3), ...learnedCandidates.filter(entry => entry.item.kind !== 'style' && entry.overlap > 0).sort((a, b) => b.overlap - a.overlap).slice(0, 5)].map(entry => entry.item);
   const learningContexts = approvedLearnings.map(item => ({ learningId: item.id, kind: item.kind, title: item.title, content: item.content }));
-  const llm = await generateGroundedAnswer(member.name, query, contexts, learningContexts, member.relationship, personaContexts, { onToken: streamOptions.onToken, maxTokens: body.live === true ? 220 : undefined });
+  const llm = await generateGroundedAnswer(member.name, query, contexts, learningContexts, member.relationship, personaContexts, {
+    onToken: streamOptions.onToken,
+    maxTokens: body.live === true ? 220 : undefined,
+    conversationHistory,
+    memorialProfile: member.memorialProfile,
+  });
   let answer = llm.answer;
   if (answer === DEFAULT_REFUSAL) sourceMemoryIds = [];
   if (containsUnsafeContent(answer)) { answer = 'I cannot provide that content.'; sourceMemoryIds = []; }
